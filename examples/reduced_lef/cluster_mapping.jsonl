@@ -1,0 +1,1 @@
+{"cluster_id":7,"liberty_cell":"TC_7","members":[{"cell_id":0,"cell_name":"u0","original_master":"INV"}],"inputs":[{"pin":"I0","net":"a","original_pins":["u0:A"]}],"outputs":[{"pin":"O0","net":"y","original_pin":"u0:Y"}]}

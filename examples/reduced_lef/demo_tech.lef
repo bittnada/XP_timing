@@ -1,0 +1,13 @@
+# Synthetic demonstration technology, NOT a real process library.
+VERSION 5.8 ;
+UNITS
+  DATABASE MICRONS 1000 ;
+END UNITS
+LAYER metal2
+  TYPE ROUTING ;
+  DIRECTION HORIZONTAL ;
+  PITCH 0.2 ;
+  WIDTH 0.1 ;
+  MINWIDTH 0.05 ;
+END metal2
+END LIBRARY

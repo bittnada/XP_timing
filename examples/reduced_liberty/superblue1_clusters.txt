@@ -1,0 +1,6 @@
+# Example only: two original greedy singleton clusters and one two-inverter cluster.
+cell_id cluster_id
+1152121 0
+1152118 1
+0 2
+1149067 2
