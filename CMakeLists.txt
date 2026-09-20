@@ -11,6 +11,11 @@ list(APPEND INSTALL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/ClusterLEFMapping.py")
 list(APPEND INSTALL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/ReducedDEF.py")
 list(APPEND INSTALL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/LeidenCluster.py")
 list(APPEND INSTALL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/LeidenGraph.py")
+list(APPEND INSTALL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/ClusterPlacement.py")
+list(APPEND INSTALL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/PlacementTimingMapping.py")
+list(APPEND INSTALL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/PreparePlacementDB.py")
+list(APPEND INSTALL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/TwoDBTiming.py")
+list(APPEND INSTALL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/CompareTimingPlacement.py")
 list(REMOVE_DUPLICATES INSTALL_SRCS)
 install(
     FILES ${INSTALL_SRCS} DESTINATION dreamplace
@@ -21,4 +26,16 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/PLACEMENT_STATE.md" DESTINATION dream
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/REDUCED_LEF.md" DESTINATION dreamplace)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/REDUCED_DEF.md" DESTINATION dreamplace)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/LEIDEN_CLUSTER.md" DESTINATION dreamplace)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/CLUSTER_PLACEMENT.md" DESTINATION dreamplace)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/run_cluster_placement.sh" DESTINATION .)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/PLACEMENT_TIMING_MAPPING.md" DESTINATION dreamplace)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/run_placement_timing_mapping.sh" DESTINATION .)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/run_prepare_placement_db.sh" DESTINATION .)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/TWO_DB_TIMING.md" DESTINATION dreamplace)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/COMPARE_TIMING_PLACEMENT.md" DESTINATION dreamplace)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/run_compare_timing_placement.sh" DESTINATION .)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/run_two_db_timing.sh" DESTINATION .)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/examples/two_db_superblue1.json"
+              "${CMAKE_CURRENT_SOURCE_DIR}/examples/rebuild_superblue1_timing_cache.json"
+        DESTINATION dreamplace/examples)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/examples/reduced_lef" DESTINATION dreamplace/examples)

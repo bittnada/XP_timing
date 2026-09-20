@@ -1,0 +1,9 @@
+{
+  "db_option": "def",
+  "mode": "binary_write",
+  "save_path": "results/superblue1/timing_edges_protected/save",
+  "early_lib_input": "benchmarks/iccad2015.ot/superblue1/superblue1_Early.lib",
+  "late_lib_input": "benchmarks/iccad2015.ot/superblue1/superblue1_Late.lib",
+  "verilog_input": "benchmarks/iccad2015.ot/superblue1/superblue1.v",
+  "sdc_input": "benchmarks/iccad2015.ot/superblue1/superblue1.sdc"
+}

@@ -234,15 +234,37 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                             if len(placedb.regions) > 0 and model.update_mask.sum() == 0:
                                 logging.debug("All regions stop updating, finish global placement")
                                 return True
-                        # a heuristic to detect divergence and stop early
-                        if len(metrics) > 50:
+                        # A placement with a difficult clustered initialization can
+                        # need substantially more than 50 outer steps before
+                        # density starts to recover.  Keep the historical defaults,
+                        # but allow an individual global-placement stage to grant a
+                        # larger recovery window and HPWL excursion.
+                        divergence_stop_window = max(
+                            1, int(global_place_params.get("divergence_stop_window", 50))
+                        )
+                        divergence_stop_hpwl_ratio = float(
+                            global_place_params.get("divergence_stop_hpwl_ratio", 2.0)
+                        )
+                        if len(metrics) > divergence_stop_window:
                             cur_metric = metrics[-1][-1][-1]
-                            prev_metric = metrics[-50][-1][-1]
+                            prev_metric = metrics[-(divergence_stop_window + 1)][-1][-1]
                             # record HPWL and overflow increase, and check divergence
                             if (
                                 cur_metric.overflow[-1] > prev_metric.overflow[-1]
-                                and cur_metric.hpwl > best_metric[0].hpwl * 2
+                                and cur_metric.hpwl
+                                > best_metric[0].hpwl * divergence_stop_hpwl_ratio
                             ):
+                                logging.warning(
+                                    "Stop after divergence recovery window: "
+                                    "overflow %g > %g from %d steps ago and "
+                                    "HPWL %g > best %g * %g",
+                                    cur_metric.overflow[-1],
+                                    prev_metric.overflow[-1],
+                                    divergence_stop_window,
+                                    cur_metric.hpwl,
+                                    best_metric[0].hpwl,
+                                    divergence_stop_hpwl_ratio,
+                                )
                                 return True
                         return False
 
@@ -365,16 +387,19 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                     logging.info("optimizer step %.3f ms" % ((time.time() - t3) * 1000))
 
                     # Perform timing-opt.
+                    bridge = getattr(placedb, 'two_db_timing', None)
+                    timing_due = (bridge.due(iteration + 1) if bridge is not None else
+                                  iteration > 500 and iteration % 15 == 0)
                     if params.global_place_flag and params.timing_opt_flag and \
                         params.enable_net_weighting and \
-                        iteration > 500 and iteration % 15 == 0:
+                        timing_due:
                         # Take the timing operator from the operator collections.
                         cur_pos = self.pos[0].data.clone().cpu().numpy()
                         # The timing operator has already integrated timer as its
                         # instance variable, so it only takes one argument.
                         timing_op(self.pos[0].data.clone().cpu())
                         timing_op.timer.update_timing()
-                        npaths = max(1, int(placedb.num_nets * 0.03))
+                        npaths = max(1, int(getattr(timing_op, 'num_timing_nets', placedb.num_nets) * 0.03))
 
                         # Report timing step.
                         # Temporary solution: modify net weights
@@ -382,18 +407,22 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                         timing_op.update_net_weights(
                             max_net_weight=placedb.max_net_weight,
                             n=npaths)
-                        if self.device != torch.device("cpu"):
+                        if bridge is not None or self.device != torch.device("cpu"):
                             # Copy weights from placedb.net_weights to device.
                             self.data_collections.net_weights.copy_(
                                 torch.from_numpy(placedb.net_weights))
+                        if bridge is not None:
+                            import TwoDBTiming
+                            TwoDBTiming.refresh_optimizer(optimizer)
                         logging.info("net-weight update step %.3f ms" % \
                             ((time.time() - beg) * 1000))
 
                         # Report tns and wns in each timing feedback call.
                         # Note that OpenTimer considers early,late,rise,fall for tns/wns.
                         # The following values are for reference.
-                        cur_metric.tns = timing_op.timer.report_tns_elw(split=1) / (time_unit * 1e17)
-                        cur_metric.wns = timing_op.timer.report_wns(split=1) / (time_unit * 1e15)
+                        # EvalMetrics prints TNS in 1e5 ps, WNS in 1e3 ps.
+                        cur_metric.tns = timing_op.timer.report_tns_elw(split=1) * time_unit * 1e7
+                        cur_metric.wns = timing_op.timer.report_wns(split=1) * time_unit * 1e9
 
                     # nesterov has already computed the objective of the next step
                     if optimizer_name.lower() == "nesterov":
@@ -503,7 +532,30 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                 ### preparation for self-adaptive divergence check
                 overflow_list = [1]
                 divergence_list = []
-                min_perturb_interval = 50
+                min_perturb_interval = max(
+                    1, int(global_place_params.get("perturb_min_interval", 50))
+                )
+                perturb_plateau_window = max(
+                    2, int(global_place_params.get("perturb_plateau_window", 15))
+                )
+                perturb_plateau_threshold = float(
+                    global_place_params.get("perturb_plateau_threshold", 0.001)
+                )
+                perturb_overflow_threshold = float(
+                    global_place_params.get("perturb_overflow_threshold", 0.9)
+                )
+                perturb_noise_overflow_threshold = float(
+                    global_place_params.get("perturb_noise_overflow_threshold", 0.95)
+                )
+                perturb_noise_min = float(
+                    global_place_params.get("perturb_noise_min", 40.0)
+                )
+                perturb_noise_max = float(
+                    global_place_params.get("perturb_noise_max", 90.0)
+                )
+                perturb_density_factor = float(
+                    global_place_params.get("perturb_density_factor", 2.0)
+                )
                 stop_placement = 0
                 last_perturb_iter = -min_perturb_interval
                 perturb_counter = 0
@@ -553,17 +605,39 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                             if (
                                 len(placedb.regions) == 0
                                 and iteration - last_perturb_iter > min_perturb_interval
-                                and check_plateau(overflow_list, window=15, threshold=0.001)
+                                and check_plateau(
+                                    overflow_list,
+                                    window=perturb_plateau_window,
+                                    threshold=perturb_plateau_threshold,
+                                )
                             ):
-                                if overflow_list[-1] > 0.9:  # stuck at high overflow
+                                if overflow_list[-1] > perturb_overflow_threshold:
                                     model.quad_penalty = True
-                                    model.density_factor *= 2
+                                    model.density_factor *= perturb_density_factor
                                     logging.info(
-                                        f"Stuck at early stage. Turn on quadratic penalty with double density factor to accelerate convergence"
+                                        "Overflow plateau at %.6f. Turn on quadratic "
+                                        "penalty and multiply density factor by %g",
+                                        overflow_list[-1],
+                                        perturb_density_factor,
                                     )
-                                    if overflow_list[-1] > 0.95:  # stuck at very high overflow
-                                        noise_intensity = min(
-                                            max(40 + (120 - 40) * (overflow_list[-1] - 0.95) * 10, 40), 90
+                                    if overflow_list[-1] > perturb_noise_overflow_threshold:
+                                        overflow_span = max(
+                                            1e-12,
+                                            1.0 - perturb_noise_overflow_threshold,
+                                        )
+                                        noise_fraction = min(
+                                            1.0,
+                                            max(
+                                                0.0,
+                                                (overflow_list[-1]
+                                                 - perturb_noise_overflow_threshold)
+                                                / overflow_span,
+                                            ),
+                                        )
+                                        noise_intensity = (
+                                            perturb_noise_min
+                                            + (perturb_noise_max - perturb_noise_min)
+                                            * noise_fraction
                                         )
                                         entropy_injection(
                                             self.pos[0],
@@ -573,7 +647,10 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                                             mode="random",
                                         )
                                         logging.info(
-                                            f"Stuck at very early stage. Turn on entropy injection with noise intensity = {noise_intensity} to help convergence"
+                                            "Inject entropy noise with intensity %.6g "
+                                            "after %d plateaued iterations",
+                                            noise_intensity,
+                                            min_perturb_interval,
                                         )
                                     last_perturb_iter = iteration
                                     perturb_counter += 1
@@ -783,8 +860,8 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                 # Report tns and wns in each timing feedback call.
                 # Note that OpenTimer considers early,late,rise,fall for tns/wns.
                 # The following values are for reference.
-                cur_metric.tns = timing_op.timer.report_tns_elw(split=1) / (time_unit * 1e17)
-                cur_metric.wns = timing_op.timer.report_wns(split=1) / (time_unit * 1e15)
+                cur_metric.tns = timing_op.timer.report_tns_elw(split=1) * time_unit * 1e7
+                cur_metric.wns = timing_op.timer.report_wns(split=1) * time_unit * 1e9
 
             logging.info(cur_metric)
             iteration += 1
@@ -809,6 +886,11 @@ class NonLinearPlace(BasicPlace.BasicPlace):
             iteration += 1
 
         # save results
+        bridge = getattr(placedb, 'two_db_timing', None)
+        if bridge is not None and bridge.feedback_count == 0:
+            logging.warning('Two-DB placement ended before any timing weight feedback. '
+                            'Increase placement iterations or lower timing_update_start. '
+                            'Final STA still runs, but does not change weights.')
         cur_pos = self.pos[0].data.clone().cpu().numpy()
         # apply solution
         placedb.apply(

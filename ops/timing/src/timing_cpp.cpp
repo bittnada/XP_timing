@@ -246,10 +246,6 @@ int timingCppLauncher(
     const int valid_size = static_cast<int>(vx.size());
     int num_pins = degree;
 
-    // This variable stores all points that is taken by multiple pins.
-    std::set<Point2i> multipin_pos;
-    std::map<Point2i, Point2i> pos2neighbor_map;
-
     // Call FLUTE to generate a steiner tree. Note that the degree must be
     // larger than 2 so that the tree is not degraded.
     if (valid_size > 1) {
@@ -271,7 +267,6 @@ int timingCppLauncher(
         // Extract the Steiner point and retrieve corresponding pin id.
         // It is possible that the two points have exactly the same
         // coordinates.
-        pos2neighbor_map.emplace(p2, p1);
         auto& id1 = retrieve_pins_from_pos(pos2pins_map, p1, num_pins);
         auto& id2 = retrieve_pins_from_pos(pos2pins_map, p2, num_pins);
 
@@ -296,33 +291,22 @@ int timingCppLauncher(
             tree.increase_cap(from, cf * wl * 0.5);
             tree.increase_cap(to, cf * wl * 0.5);
           }
-          // Record if a pin set contains multiple pins.
-          if (id1.size() > 1) multipin_pos.insert(p1);
-          if (id2.size() > 1) multipin_pos.insert(p2);
         }
       }
       free(flutetree.branch);
-    } else if (valid_size == 1 && degree > 1) {
-      // All pins (at least 2 pins) in this net are superposed at point
-      // (vx[0], vy[0]), so we add this pos to multipin_pos.
-      multipin_pos.emplace(vx[0], vy[0]);
     }
 
-    // Revert all pins filtered in the previous stage.
-    for (const auto& pos : multipin_pos) {
-      const auto& pins = pos2pins_map[pos];
-      int adj_pin = global2inner_map[root];
-      const auto& _ppos = pos2neighbor_map[pos];
-      if (auto itr = pos2pins_map.find(_ppos); itr != pos2pins_map.end()) {
-        // Only take the first one. In fact an adjacent rc node must be either a
-        // Steiner node or the root.
-        adj_pin = *itr->second.cbegin();
-      }
-      auto from = emplace_rc_node(adj_pin);
-      auto distance = manhattanDistance(pos, _ppos);
-      T wl = static_cast<T>(distance * 1.0) / scale / unit_to_micron;
+    // FLUTE connects one representative at each distinct coordinate. Restore
+    // every other physical pin with a ZERO resistance edge to that same
+    // representative, retaining its pin pointer (and hence its input cap).
+    // This also handles the all-superposed case without inventing a neighbor
+    // at (0,0), and works when the driver is not the first pin in the set.
+    for (const auto& entry : pos2pins_map) {
+      const auto& pins = entry.second;
+      if (pins.size() < 2) continue;
+      auto from = emplace_rc_node(*pins.cbegin());
       for (auto it = std::next(pins.cbegin()); it != pins.cend(); ++it)
-        tree.insert_segment(from, emplace_rc_node(*it), wl * rf);
+        tree.insert_segment(from, emplace_rc_node(*it), 0);
     }
     if (degree == 1) {
       // Special handling: the net contains only one pin!

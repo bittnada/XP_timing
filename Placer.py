@@ -23,6 +23,7 @@ import Timer
 import NonLinearPlace
 import TimingCluster
 import PlacementState
+import TwoDBTiming
 import pdb
 
 
@@ -39,14 +40,17 @@ def place(params):
     np.random.seed(params.random_seed)
     # read database
     tt = time.time()
-    placedb = PlaceDB.PlaceDB()
-    placedb(params)
+    timer = None
+    if TwoDBTiming.enabled(params):
+        placedb, timer = TwoDBTiming.load(params)
+    else:
+        placedb = PlaceDB.PlaceDB()
+        placedb(params)
     logging.info("reading database takes %.2f seconds" % (time.time() - tt))
 
     # Read timing constraints provided in the benchmarks into out timing analysis
     # engine and then pass the timer into the placement core.
-    timer = None
-    if params.timing_opt_flag or getattr(params, "timing_clustering_flag", 0):
+    if timer is None and (params.timing_opt_flag or getattr(params, "timing_clustering_flag", 0)):
         tt = time.time()
         timer = Timer.Timer()
         timer(params, placedb)

@@ -334,6 +334,50 @@ class NativeCacheTest(unittest.TestCase):
                             if math.isnan(x): self.assertTrue(math.isnan(y))
                             else: self.assertAlmostEqual(x, y, places=6)
 
+    def test_superposed_rc_is_zero_and_keeps_pin_loads(self):
+        import numpy as np
+        import torch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); p = fixture(root)
+            Path(p.lib_input).write_text(LIB.replace('time_unit : "1ns";',
+                'time_unit : "1ns"; pulling_resistance_unit : "1kohm";'))
+            Path(p.verilog_input).write_text('module top(a,y,z); input a; output y,z; wire n; '
+                'INV u1(.A(a),.Y(n)); INV u2(.A(n),.Y(y)); INV u3(.A(n),.Y(z)); endmodule')
+            timer = self.cpp.io_forward(['test', '--lib_input', p.lib_input,
+                '--verilog_input', p.verilog_input, '--sdc_input', p.sdc_input])
+            timer.update_timing()
+            pins = ['a', 'u1:A', 'u2:A', 'u3:A', 'u1:Y', 'u2:Y', 'y', 'u3:Y', 'z']
+            nets = ['a', 'n', 'y', 'z']
+            owners = torch.tensor([0, 1, 2, 3, 1, 2, 4, 3, 5], dtype=torch.int32)
+            flat = torch.arange(9, dtype=torch.int32)
+            starts = torch.tensor([0, 2, 5, 7, 9], dtype=torch.int32)
+            offsets = torch.zeros(9, dtype=torch.float64)
+            def run(x, y, resistance=100.):
+                previous = os.getcwd()
+                try:
+                    os.chdir(Path(__file__).resolve().parent.parent)
+                    self.cpp.forward(timer, torch.tensor(x+y, dtype=torch.float64), nets, pins,
+                        flat, starts, owners, offsets, offsets, resistance, 1e-15, 1., 1, 1, 1000)
+                finally:
+                    os.chdir(previous)
+                timer.update_timing()
+                return np.array([timer.report_at(pin, True, True) for pin in pins])
+            baseline = run([0.]*6, [0.]*6)
+            translated = run([123.]*6, [456.]*6)
+            np.testing.assert_allclose(translated, baseline, atol=1e-7)
+            # n driver is LAST in DEF order; sink and driver ATs must match.
+            self.assertAlmostEqual(translated[2], translated[4], places=7)
+            self.assertAlmostEqual(translated[3], translated[4], places=7)
+            self.assertGreater(translated[4] - translated[1], .1)  # Cell delay/load retained.
+            dump = root / 'rc.txt'; timer.dump_rctree_file(str(dump))
+            for pin in pins: self.assertIn(pin, dump.read_text())
+            # Mixed distinct/duplicate coordinates, then all co-located again.
+            mixed = run([0, 10, 30, 30, 50, 60], [0]*6)
+            mixed_shift = run([100, 110, 130, 130, 150, 160], [200]*6)
+            np.testing.assert_allclose(mixed_shift, mixed, atol=1e-7)
+            self.assertAlmostEqual(mixed[2], mixed[3], places=7)
+            np.testing.assert_allclose(run([123.]*6, [456.]*6), baseline, atol=1e-7)
+
     def test_rc_and_net_weight_updates_after_restore(self):
         import torch
         with tempfile.TemporaryDirectory() as tmp:

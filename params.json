@@ -261,7 +261,7 @@
     "default" : 0
     },
 "db_option" : {
-    "description" : "MakeDB physical/timing lifecycle: def reads DEF/LEF, binary restores DB and positions, binary_wo_pos restores geometry and fixed/IO positions",
+    "description" : "MakeDB lifecycle: def, binary, binary_wo_pos, or two_timing_placement_db (reduced placement + original CPU STA)",
     "default" : ""
     },
 "mode" : {
@@ -275,7 +275,27 @@
 "timing_cache_dependencies" : {
     "description" : "Additional SDC/Tcl source files recorded and checked during explicit timing DB export; not read on restore",
     "default" : []
-    },
+},
+"placement_db_path" : {
+    "description" : "Two-DB mode: reduced saved DB root containing physical_db",
+    "default" : ""
+},
+"timing_db_path" : {
+    "description" : "Two-DB mode: original saved DB root containing physical_db and timing_cache",
+    "default" : ""
+},
+"placement_timing_mapping_path" : {
+    "description" : "Two-DB mode: checked ID_MAPPING directory",
+    "default" : ""
+},
+"timing_update_start" : {
+    "description" : "Two-DB mode: completed optimizer steps before first weight feedback",
+    "default" : 500
+},
+"timing_update_interval" : {
+    "description" : "Two-DB mode: optimizer steps between subsequent weight updates",
+    "default" : 15
+},
 "timing_clustering_flag" : {
     "description" : "run timing-aware standard-cell clustering and save its abstraction before placement",
     "default" : 0

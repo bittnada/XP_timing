@@ -97,6 +97,7 @@ class PlacementStateTest(unittest.TestCase):
         # Raw final orientation differs from stale Python label.
         db.rawdb.setNodeOrient(0, 5)
         db.final_placement_metrics = {'wns': (-12.5, 'ps_late'), 'tns': (None, 'ps_late'),
+                                      'hpwl': (1234.5, 'weighted_original_db_length'),
                                       'congestion_max': (2.5, 'reference_congestion')}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -110,6 +111,8 @@ class PlacementStateTest(unittest.TestCase):
             self.assertEqual(list(orient), ['FS', 'FN', 'N'])
             self.assertIn('# metric\twns\t-12.5\tps_late', (root / 'o.tsv').read_text())
             self.assertIn('# metric\ttns\tNA\tps_late', (root / 'o.tsv').read_text())
+            self.assertIn('# metric\thpwl\t1234.5\tweighted_original_db_length',
+                          (root / 'o.tsv').read_text())
             self.assertIn('2\tfixed.DREAMPlace.Shape0', (root / 'x.tsv.cells.tsv').read_text())
             with self.assertRaises(FileExistsError):
                 state.write_final(p, db)

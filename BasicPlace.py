@@ -568,6 +568,10 @@ class BasicPlace(nn.Module):
         @param placedb the placement database
         @param timer the timer object used in timing-driven mode
         """
+        bridge = getattr(placedb, 'two_db_timing', None)
+        if bridge is not None:
+            original_op = self.build_timing_op(bridge.timing_params, bridge.original, timer)
+            return bridge.bind(self.data_collections, original_op)
         return timing.TimingOpt(
             timer, # The timer should be at the same level as placedb.
             getattr(placedb, 'timing_net_names', placedb.net_names),

@@ -1,6 +1,7 @@
 import json
 import os, sys
 import numpy as np
+import logging
 from Cell import LEF
 from Pin import Pin
 from NameIdMap import NameIdMap
@@ -146,9 +147,19 @@ class ReadLEFinfo:
                 currentPinIdx = self.lef_pin_name_to_id.get_or_create(currentPinID)
                 pin_ = Pin(currentPinIdx, macro_lef)
                 pinbegin = True
+                # USE is a pin attribute, never inherited from a preceding pin
+                # or macro. Resolve it at END <pin>, after all PORTs/attributes.
+                use = None
                 
             
             if macroLinebegin == True and pinbegin == True and line == ("END " + currentPinID):
+                if use is None:
+                    use = 'SIGNAL'
+                    logging.warning(
+                        "[ReadLEF] %s:%d PIN '%s/%s' has no USE; forcing USE to SIGNAL",
+                        fileAddress, idx + 1, macroID, currentPinID)
+                for layer_name in pin_.get_layers():
+                    pin_.set_use(layer_name, use)
                 macro_lef.add_pin(pin_)
                 pinbegin = False #initialization
                 
@@ -203,14 +214,10 @@ class ReadLEFinfo:
             if macroLinebegin == True and pinbegin == True and layerbegin == True and line.strip() == "END":
                 if len(rectangleList.get(metalLayer, [])) >= 4:
                     pin_.set_layer_rectangle(metalLayer, rectangleList[metalLayer])
-                try:
-                    pin_.set_use(metalLayer, use)
-                except:
-                    if pinID == 'OBS':
-                        pin_set_use = 'OBS'
-                        pin_.set_use(metalLayer, pin_set_use)
-                    else:
-                        print(f"[ Warning] LEF parsing error at line {idx} in file {fileAddress} or use is not defined. Error info: use info of pin {currentPinID} in macro {macroID} is missing for metal layer {metalLayer}.")    
+                # OBS is not a signal pin. Ordinary pin USE is assigned only
+                # at END <pin>, so explicit USE after a PORT also takes effect.
+                if pinID == 'OBS':
+                    pin_.set_use(metalLayer, 'OBS')
                 layerbegin = False
         file.close()
         return LEFinfo

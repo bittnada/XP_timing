@@ -175,7 +175,7 @@ class Params:
         """
         if getattr(self, '_physical_has_def_template', None) is False:
             return 'pl'
-        if (getattr(self, 'db_option', '') in ('def', 'binary', 'binary_wo_pos')
+        if (getattr(self, 'db_option', '') in ('def', 'binary', 'binary_wo_pos', 'two_timing_placement_db')
                 or getattr(self, 'def_path', '') or self.def_input): # LEF/DEF
             return "def"
         else: # Bookshelf
