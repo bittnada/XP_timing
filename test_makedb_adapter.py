@@ -45,6 +45,7 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(list(db.node_names), ['u1', 'u2', 'a', 'y'])
         self.assertEqual(list(db.pin_names), ['PIN a', 'u1 A', 'u1 Y', 'u2 A', 'u2 Y', 'PIN y'])
         self.assertEqual(list(db.net_names), ['a', 'n', 'y'])
+        self.assertEqual(list(db.net_uses), ['SIGNAL', 'SIGNAL', 'SIGNAL'])
         self.assertEqual(len(db.net_weight_deltas), 3)
         adapter.save(db, self.p)
         self.assertFalse((self.root / 'cache/physical_db/net2pin_map.npy').exists())
@@ -54,6 +55,7 @@ class AdapterTest(unittest.TestCase):
             self.p.db_option = option
             _, restored = self.read()
             self.assertEqual(restored.congestion_metadata, db.congestion_metadata)
+            np.testing.assert_array_equal(restored.net_uses, db.net_uses)
             for field in adapter.INTS + adapter.STRINGS:
                 np.testing.assert_array_equal(getattr(db, field), getattr(restored, field))
             if option == 'binary':
@@ -63,6 +65,19 @@ class AdapterTest(unittest.TestCase):
                 np.testing.assert_array_equal(restored.node_x[2:], db.node_x[2:])
         after = {str(p): p.stat().st_mtime_ns for p in self.root.rglob('*') if p.is_file()}
         self.assertEqual(before, after)
+
+    def test_def_clock_net_is_absent_from_placement_binary(self):
+        path = self.root / 'tiny.def'
+        path.write_text(path.read_text().replace(
+            '- n ( u1 Y ) ( u2 A ) ;', '- n ( u1 Y ) ( u2 A ) + USE CLOCK ;'))
+        _, db = self.read()
+        self.assertEqual(list(db.net_names), ['a', 'y'])
+        self.assertEqual(list(db.net_uses), ['SIGNAL', 'SIGNAL'])
+        adapter.save(db, self.p)
+        self.p.db_option = 'binary'
+        _, restored = self.read()
+        self.assertEqual(list(restored.net_names), ['a', 'y'])
+        self.assertEqual(list(restored.net_uses), ['SIGNAL', 'SIGNAL'])
 
     def test_normal_read_does_not_export(self):
         from unittest.mock import patch

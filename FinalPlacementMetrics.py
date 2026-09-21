@@ -153,10 +153,12 @@ def evaluate(placer, params, db, iteration):
             placer, params, db, data, params.num_bins_x, params.num_bins_y)
         overflow, max_density = overflow_op(pos)
         hpwl = placer.op_collections.hpwl_op(pos).item() / params.scale_factor
+        filtered_hpwl = placer.op_collections.filtered_unweighted_hpwl_op(pos).item() / params.scale_factor
         area = float(db.total_movable_node_area)
         result = {
             'wns': (None, 'ps_late'), 'tns': (None, 'ps_late'),
             'hpwl': (hpwl, 'weighted_original_db_length'),
+            'filtered_unweighted_hpwl': (filtered_hpwl, 'unweighted_filtered_db_length'),
             'overflow': (overflow.item() / area if area > 0 else None, 'ratio'),
             'max_density': (max_density.item(), 'ratio'),
         }

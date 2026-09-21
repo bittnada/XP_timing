@@ -161,6 +161,8 @@ def _read_def(params):
         values['design_name'] = re.search(r'\bDESIGN\s+(\S+)\s*;', values['def_template']).group(1)
         values['row_orients'] = _row_orients(values['def_template'])
         values['placement_only_nets'] = [n for n in reader.net_names if n not in reader.original_net_names]
+        values['net_uses'] = [str(reader.net_info.get(n, {}).get('use', 'SIGNAL'))
+                              .replace('USE ', '').strip().upper() for n in reader.net_names]
         return _maps(SimpleNamespace(**values))
 
 
@@ -182,7 +184,8 @@ def save(db, params):
         np.save(root / (field + '.npy'), np.asarray(getattr(db, field), dtype=dtype), allow_pickle=False)
     metadata = {name: getattr(db, name) for name in SCALARS}
     metadata.update(schema=SCHEMA, design_name=db.design_name, row_orients=db.row_orients,
-                    placement_only_nets=db.placement_only_nets)
+                    placement_only_nets=db.placement_only_nets,
+                    net_uses=getattr(db, 'net_uses', ['SIGNAL'] * len(db.net_names)))
     metadata['congestion_metadata'] = getattr(db, 'congestion_metadata', {})
     (root / 'template.def').write_text(db.def_template)
     (root / 'manifest.json').write_text(json.dumps(metadata, default=_json_default))
@@ -199,6 +202,7 @@ def _load(root):
     metadata['cell_info'] = {}; metadata['ext_pin_info'] = {}
     metadata['def_template'] = ''
     metadata['def_template_path'] = str(root / 'template.def')
+    metadata.setdefault('net_uses', ['SIGNAL'] * len(metadata['net_names']))
     return _maps(SimpleNamespace(**metadata))
 
 
@@ -264,6 +268,10 @@ def _legacy(root):
     db.design_name = root.name
     db.def_template = ''
     db.placement_only_nets = []
+    netlist_path = root / 'netlist_info.json'
+    netlist = json.loads(netlist_path.read_text()) if netlist_path.is_file() else {}
+    db.net_uses = [str(netlist.get(text(n), {}).get('use', 'SIGNAL'))
+                   .replace('USE ', '').strip().upper() for n in db.net_names]
     for i, name in enumerate(db.net_names):
         pins = db.flat_net2pin_map[db.flat_net2pin_start_map[i]:db.flat_net2pin_start_map[i + 1]]
         names = [str(db.pin_names[int(p)]).rsplit(' ', 1) for p in pins]

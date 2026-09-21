@@ -26,6 +26,28 @@
   "gamma": 4,
   "random_seed": 1000,
   "ignore_net_degree": 100,
+  "best_checkpoint": {
+    "enabled": 1,
+    "overflow": {
+      "hard_limit": 0.2,
+      "absolute_tolerance": 0.01,
+      "relative_tolerance": 0.10,
+      "lock_at_stop": 1
+    },
+    "hpwl": {
+      "max_net_degree": 100,
+      "exclude_net_regex": "(?i)^(?:MODCSA|CriticalPathNet)|(?:^|[/_.])(?:clk|clock)(?:$|[/_.0-9])"
+    },
+    "score": {
+      "weights": {
+        "wns": 0.4,
+        "tns": 0.3,
+        "hpwl": 0.2,
+        "overflow": 0.1
+      },
+      "minimum_improvement": 0.001
+    }
+  },
   "enable_fillers": 1,
   "gp_noise_ratio": 0.025,
   "global_place_flag": 1,

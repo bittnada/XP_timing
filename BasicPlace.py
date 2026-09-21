@@ -32,6 +32,7 @@ import dreamplace.ops.k_reorder.k_reorder as k_reorder
 import dreamplace.ops.independent_set_matching.independent_set_matching as independent_set_matching
 import dreamplace.ops.pin_weight_sum.pin_weight_sum as pws
 import dreamplace.ops.timing.timing as timing
+import BestPlacement
 import pdb
 
 
@@ -231,6 +232,7 @@ class PlaceOpCollection(object):
         self.pin_pos_op = None
         self.move_boundary_op = None
         self.hpwl_op = None
+        self.filtered_unweighted_hpwl_op = None
         self.rmst_wl_op = None
         self.density_overflow_op = None
         self.legality_check_op = None
@@ -398,6 +400,9 @@ class BasicPlace(nn.Module):
         self.op_collections.hpwl_op = self.build_hpwl(
             params, placedb, self.data_collections,
             self.op_collections.pin_pos_op, self.device)
+        self.op_collections.filtered_unweighted_hpwl_op = self.build_filtered_unweighted_hpwl(
+            params, placedb, self.data_collections,
+            self.op_collections.pin_pos_op, self.device)
         self.op_collections.pws_op = self.build_pws(placedb, self.data_collections)
         # rectilinear minimum steiner tree wirelength from flute
         # can only be called once
@@ -509,6 +514,27 @@ class BasicPlace(nn.Module):
             return wirelength_for_pin_op(pin_pos_op(pos))
 
         return build_wirelength_op
+
+    def build_filtered_unweighted_hpwl(self, params, placedb, data_collections,
+                                       pin_pos_op, device):
+        """Build a cross-iteration HPWL metric independent of timing weights."""
+        mask, stats = BestPlacement.filtered_net_mask(params, placedb)
+        logging.info('Filtered unweighted HPWL nets: %d/%d included; '
+                     'degree-invalid=%d clock=%d placement-only=%d regex=%d degree<%d',
+                     stats['included'], stats['total'], stats['invalid_degree'], stats['clock'],
+                     stats['placement_only'], stats['regex'], stats['max_degree_exclusive'])
+        metric = hpwl.HPWL(
+            flat_netpin=data_collections.flat_net2pin_map,
+            netpin_start=data_collections.flat_net2pin_start_map,
+            pin2net_map=data_collections.pin2net_map,
+            net_weights=torch.ones(len(placedb.net_names), dtype=data_collections.pos[0].dtype,
+                                   device=device),
+            net_mask=torch.as_tensor(mask, dtype=torch.uint8, device=device),
+            algorithm='net-by-net')
+
+        def op(pos):
+            return metric(pin_pos_op(pos))
+        return op
     
     def build_pws(self, placedb, data_collections):
         """

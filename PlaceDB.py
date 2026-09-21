@@ -558,6 +558,8 @@ class PlaceDB (TimingCacheMixin):
         self.net_name2id_map = pydb.net_name2id_map
         self.pin_name2id_map = pydb.pin_name2id_map
         self.net_names = np.array(pydb.net_names, dtype=np.string_)
+        self.net_uses = np.array(getattr(pydb, 'net_uses', ['SIGNAL'] * len(self.net_names)),
+                                 dtype=np.string_)
         self.net2pin_map = pydb.net2pin_map
         self.flat_net2pin_map = np.array(pydb.flat_net2pin_map, dtype=np.int32)
         self.flat_net2pin_start_map = np.array(pydb.flat_net2pin_start_map, dtype=np.int32)

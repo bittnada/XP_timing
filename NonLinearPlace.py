@@ -25,6 +25,7 @@ import BasicPlace
 import PlaceObj
 import NesterovAcceleratedGradientOptimizer
 import EvalMetrics
+import BestPlacement
 import pdb
 import dreamplace.ops.fence_region.fence_region as fence_region
 
@@ -100,6 +101,7 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                 # As global placement may easily diverge, we record the position of best overflow
                 best_metric = [None]
                 best_pos = [None]
+                checkpoint_tracker = BestPlacement.Tracker(params)
 
                 if params.gpu:
                     torch.cuda.synchronize()
@@ -355,6 +357,16 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                     # t1 = time.time()
                     cur_metric.evaluate(placedb, eval_ops, pos, model.data_collections)
                     model.overflow = cur_metric.overflow.data.clone()
+                    # cur_metric describes this exact pre-step position.  Keep
+                    # metric and coordinates aligned (the old code copied the
+                    # position after optimizer.step()).
+                    checkpoint_tracker.update_density(cur_metric.overflow[-1], pos)
+                    if best_metric[0] is None or best_metric[0].overflow[-1] > cur_metric.overflow[-1]:
+                        best_metric[0] = cur_metric
+                        if best_pos[0] is None:
+                            best_pos[0] = pos.data.clone()
+                        else:
+                            best_pos[0].data.copy_(pos.data)
                     # logging.debug("evaluation %.3f ms" % ((time.time()-t1)*1000))
                     # t2 = time.time()
 
@@ -399,6 +411,25 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                         # instance variable, so it only takes one argument.
                         timing_op(self.pos[0].data.clone().cpu())
                         timing_op.timer.update_timing()
+                        report_tns = timing_op.timer.report_tns_elw(split=1)
+                        report_wns = timing_op.timer.report_wns(split=1)
+                        ps_per_unit = time_unit * 1e12
+                        checkpoint_tns_ps = float(report_tns) * ps_per_unit
+                        checkpoint_wns_ps = float(report_wns) * ps_per_unit
+                        with torch.no_grad():
+                            checkpoint_overflow, _ = model.op_collections.density_overflow_op(pos)
+                            if checkpoint_overflow.numel() == 1:
+                                checkpoint_overflow = checkpoint_overflow / placedb.total_movable_node_area
+                            else:
+                                checkpoint_overflow = torch.max(
+                                    checkpoint_overflow /
+                                    model.data_collections.total_movable_node_area_fence_region)
+                            checkpoint_hpwl = self.op_collections.filtered_unweighted_hpwl_op(pos)
+                        checkpoint_tracker.update_density(checkpoint_overflow, pos)
+                        checkpoint_tracker.update_quality(
+                            checkpoint_wns_ps, checkpoint_tns_ps,
+                            checkpoint_hpwl.item() / params.scale_factor,
+                            checkpoint_overflow.item(), pos, iteration + 1)
                         npaths = max(1, int(getattr(timing_op, 'num_timing_nets', placedb.num_nets) * 0.03))
 
                         # Report timing step.
@@ -421,8 +452,8 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                         # Note that OpenTimer considers early,late,rise,fall for tns/wns.
                         # The following values are for reference.
                         # EvalMetrics prints TNS in 1e5 ps, WNS in 1e3 ps.
-                        cur_metric.tns = timing_op.timer.report_tns_elw(split=1) * time_unit * 1e7
-                        cur_metric.wns = timing_op.timer.report_wns(split=1) * time_unit * 1e9
+                        cur_metric.tns = report_tns * time_unit * 1e7
+                        cur_metric.wns = report_wns * time_unit * 1e9
 
                     # nesterov has already computed the objective of the next step
                     if optimizer_name.lower() == "nesterov":
@@ -430,14 +461,6 @@ class NonLinearPlace(BasicPlace.BasicPlace):
 
                     # actually reports the metric before step
                     logging.info(cur_metric)
-                    # record the best outer cell overflow
-                    if best_metric[0] is None or best_metric[0].overflow[-1] > cur_metric.overflow[-1]:
-                        best_metric[0] = cur_metric
-                        if best_pos[0] is None:
-                            best_pos[0] = self.pos[0].data.clone()
-                        else:
-                            best_pos[0].data.copy_(self.pos[0].data)
-
                     logging.info("full step %.3f ms" % ((time.time() - t0) * 1000))
 
                 def check_plateau(x, window=10, threshold=0.001):
@@ -747,6 +770,7 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                                 # reset best metric
                                 best_metric[0] = None
                                 best_pos[0] = None
+                                checkpoint_tracker = BestPlacement.Tracker(params)
 
                                 break
 
@@ -765,6 +789,27 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                         if "learning_rate_decay" in global_place_params:
                             for param_group in optimizer.param_groups:
                                 param_group["lr"] *= global_place_params["learning_rate_decay"]
+
+                # Include the last optimizer position in the density fallback;
+                # quality candidates are deliberately limited to fresh STA updates.
+                with torch.no_grad():
+                    stage_overflow, _ = model.op_collections.density_overflow_op(self.pos[0])
+                    if stage_overflow.numel() == 1:
+                        stage_overflow = stage_overflow / placedb.total_movable_node_area
+                    else:
+                        stage_overflow = torch.max(
+                            stage_overflow /
+                            model.data_collections.total_movable_node_area_fence_region)
+                    checkpoint_tracker.update_density(stage_overflow, self.pos[0])
+                selected_pos, selected_kind, selected_metrics = checkpoint_tracker.selected()
+                if cur_stage != len(global_place_stages) - 1:
+                    selected_pos = None
+                if selected_pos is not None:
+                    self.pos[0].data.copy_(selected_pos.data)
+                    logging.info('Restored %s checkpoint at end of global-placement stage: %s',
+                                 selected_kind, selected_metrics)
+                    placedb.best_placement_checkpoint = dict(
+                        kind=selected_kind, metrics=selected_metrics, stage=cur_stage)
 
                 # in case of divergence, use the best metric
                 # last_metric = all_metrics[-1][-1][-1]

@@ -96,7 +96,8 @@ class FinalMetricsTest(unittest.TestCase):
         timer.report_tns_elw.return_value = -.05
         timing_op = Mock(timer=timer)
         placer = SimpleNamespace(pos=[pos], data_collections=SimpleNamespace(),
-            op_collections=SimpleNamespace(hpwl_op=lambda _: torch.tensor(30.), timing_op=timing_op))
+            op_collections=SimpleNamespace(hpwl_op=lambda _: torch.tensor(30.),
+                filtered_unweighted_hpwl_op=lambda _: torch.tensor(20.), timing_op=timing_op))
         overflow_op = Mock(return_value=(torch.tensor(.1), torch.tensor(1.2)))
         fake_placeobj = SimpleNamespace(PlaceObj=SimpleNamespace(build_electric_overflow=Mock(return_value=overflow_op)))
         weights = db.net_weights.copy()
@@ -109,6 +110,7 @@ class FinalMetricsTest(unittest.TestCase):
         self.assertAlmostEqual(metrics['wns'][0], -20.)
         self.assertAlmostEqual(metrics['tns'][0], -50.)
         self.assertEqual(metrics['hpwl'][0], 30.)
+        self.assertEqual(metrics['filtered_unweighted_hpwl'][0], 20.)
         self.assertEqual(metrics['iteration'][0], 42)
         self.assertIs(db.final_placement_metrics, metrics)
         timer.report_wns.return_value = float('nan')
