@@ -78,10 +78,25 @@ def load(params):
     from dreamplace.ops.timing import timing_cpp
 
     validate_options(params)
-    # Fail before allocating the large physical DBs if native cache is stale.
-    checked_model(Path(params.timing_db_path) / 'timing_cache', timing_cpp)
+    store = None
+    role = getattr(params, 'shared_memory_role', '') or ''
+    if role == 'client':
+        from SharedSnapshot import attach
+        directory = getattr(params, 'shared_memory_dir', '')
+        if not directory:
+            raise ValueError(MODE + ' client mode requires shared_memory_dir')
+        store = attach(directory)
+        LOG.info('Two-DB client attached to shared snapshot %s', store.manifest['shm_name'])
+    elif role and role != 'master':
+        raise ValueError('shared_memory_role must be master, client, or empty')
+    else:
+        # Fail before allocating the large physical DBs if native cache is stale.
+        checked_model(Path(params.timing_db_path) / 'timing_cache', timing_cpp)
     pp = restore_params(params, params.placement_db_path)
     tp = restore_params(params, params.timing_db_path, timing=True)
+    if store is not None:
+        pp._shared_snapshot = tp._shared_snapshot = store
+        pp._shared_prefix, tp._shared_prefix = 'placement', 'timing'
     placement = PlaceDB.PlaceDB()
     placement(pp)
     original = PlaceDB.PlaceDB()
@@ -89,9 +104,17 @@ def load(params):
     original.num_filler_nodes = 0
     MakeDBAdapter.finish_initial(original, tp)
     # No original.initialize(), filler/density structures, or GPU collection.
-    maps = load_mapping(params.placement_timing_mapping_path, original, placement)
+    maps = load_mapping(params.placement_timing_mapping_path, original, placement, store=store)
     timer = Timer.Timer()
-    timer(tp, original)
+    if store is not None:
+        runtime = Path(directory) / 'runtime'
+        model = store.materialize('timing_cache/model.bin', runtime / 'model.bin')
+        timer.raw_timer = timing_cpp.load_timing_model(str(model))
+        timer.placedb = original
+        original.timing_cache_info = {'status': 'restored_shared', 'model': str(model)}
+        LOG.info('timing DB restored from shared memory: %s', model)
+    else:
+        timer(tp, original)
     timer.update_timing()
     for field in ('scale_factor', 'shift_factor', 'num_bins_x', 'num_bins_y', 'target_density',
                   '_physical_design_name', '_physical_has_def_template'):

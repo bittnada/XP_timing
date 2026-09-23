@@ -422,10 +422,13 @@ def write_tables(root, timing, placement, a):
                 w.writerow(row)
 
 
-def load_mapping(path, timing_db, placement_db):
+def load_mapping(path, timing_db, placement_db, store=None):
     """Read binary maps only after verifying both current DB ID orders and hashes."""
-    root = Path(path)
-    report = json.loads((root / 'manifest.json').read_text())
+    if store is not None:
+        report = json.loads(store.blob('mapping/manifest.json').decode())
+    else:
+        root = Path(path)
+        report = json.loads((root / 'manifest.json').read_text())
     if report.get('schema') != SCHEMA or report.get('status') != 'complete':
         raise MappingError('Incomplete/unsupported mapping manifest')
     timing, placement = snapshot(timing_db), snapshot(placement_db)
@@ -436,9 +439,20 @@ def load_mapping(path, timing_db, placement_db):
     for field in ARRAYS:
         filename = field + '.npy'
         info = report['arrays'][field]
-        if info['file'] != filename or file_hash(root / filename) != info['sha256']:
+        if info['file'] != filename:
             raise MappingError('Mapping array checksum mismatch: ' + field)
-        a = np.load(root / filename, mmap_mode='r', allow_pickle=False)
+        if store is not None:
+            a = store.array('mapping/' + filename, copy=False)
+            # Mapping manifest hashes the on-disk .npy file (header + payload).
+            # SHM stores the raw array; publish recorded that file hash as source_sha256.
+            published = store.manifest['entries']['mapping/' + filename]['source_sha256']
+            if published != info['sha256']:
+                raise MappingError('Mapping array checksum mismatch: ' + field)
+        else:
+            root = Path(path)
+            if file_hash(root / filename) != info['sha256']:
+                raise MappingError('Mapping array checksum mismatch: ' + field)
+            a = np.load(root / filename, mmap_mode='r', allow_pickle=False)
         if a.ndim != 1 or a.dtype != np.dtype('int64') or len(a) != info['length']:
             raise MappingError('Invalid mapping array shape/dtype: ' + field)
         result[field] = a

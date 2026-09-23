@@ -37,6 +37,11 @@ def place(params):
     assert (not params.gpu) or configure.compile_configurations["CUDA_FOUND"] == 'TRUE', \
             "CANNOT enable GPU without CUDA compiled"
 
+    if getattr(params, 'shared_memory_role', '') == 'master':
+        import SharedMemoryServer
+        SharedMemoryServer.publish_from_params(params)
+        return []
+
     np.random.seed(params.random_seed)
     # read database
     tt = time.time()
@@ -192,6 +197,10 @@ if __name__ == "__main__":
             key = action + '_' + field
             if getattr(args, key) is not None:
                 setattr(params, key, getattr(args, key))
+    for key in ('shared_memory_role', 'shared_memory_dir', 'result_dir'):
+        value = getattr(args, key, None)
+        if value is not None:
+            setattr(params, key, value)
     logging.info("parameters = %s" % (params))
     # control numpy multithreading
     os.environ["OMP_NUM_THREADS"] = "%d" % (params.num_threads)

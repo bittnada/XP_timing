@@ -114,6 +114,32 @@ for this run (they are not silently exported back to binary snapshots).
 - The core `TimingOpt` function still uses FLUTE LUTs relative to the working
   directory; run from installed `bin/` as above.
 
+## Shared-memory master / client
+
+Publish the immutable two-DB binaries once, then start many clients that only
+read their own `read_posX` / `read_posY`.
+
+```sh
+python3 dreamplace/SharedMemoryServer.py \
+  --timing-db results/superblue1/timing_flow_v2/save \
+  --placement-db results/superblue1/timing_flow_v2/PLACEMENT_U0.7/save \
+  --mapping results/superblue1/timing_flow_v2/PLACEMENT_U0.7/ID_MAPPING \
+  --output results/shared_memory_twodb
+```
+
+Keep that process alive. Each client JSON is a normal `two_timing_placement_db`
+config plus:
+
+```json
+"shared_memory_role": "client",
+"shared_memory_dir": "results/shared_memory_twodb"
+```
+
+Positions, net weights, GPU tensors and OpenTimer RC/STA stay private.
+Connectivity, names, ID maps and the static timing model come from the shared
+segment. `"shared_memory_role": "master"` on a two-DB JSON makes `Placer.py`
+publish and sleep instead of placing.
+
 ## Code and tests
 
 - `TwoDBTiming.py`: restore orchestration, projection, scheduling and weight map.

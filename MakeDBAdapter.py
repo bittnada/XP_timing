@@ -290,8 +290,20 @@ def read(params):
     option = getattr(params, 'db_option', '') or 'def'
     if option not in ('def', 'binary', 'binary_wo_pos'):
         raise ValueError('MakeDB adapter supports def, binary and binary_wo_pos, not ' + option)
+    store = getattr(params, '_shared_snapshot', None)
+    prefix = getattr(params, '_shared_prefix', None)
     if option == 'def':
         db = _read_def(params)
+    elif store is not None:
+        if not prefix:
+            raise ValueError('shared snapshot restore requires _shared_prefix')
+        from SharedSnapshot import load_physical
+        db = load_physical(store, prefix)
+        if option == 'binary_wo_pos':
+            end = db.num_physical_nodes - db.num_terminals - db.num_terminal_NIs
+            db.node_x = np.asarray(db.node_x).copy(); db.node_x[:end] = 0
+            db.node_y = np.asarray(db.node_y).copy(); db.node_y[:end] = 0
+        logging.info('physical DB restored from shared memory (%s %s)', prefix, option)
     else:
         if not getattr(params, 'save_path', ''):
             raise ValueError('save_path is required to restore MakeDB')

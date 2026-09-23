@@ -37,6 +37,12 @@ def add_arguments(parser):
 def parse_cli(argv=None):
     parser = add_arguments(argparse.ArgumentParser(description='DREAMPlace placement'))
     parser.add_argument('config', help='DREAMPlace JSON configuration')
+    parser.add_argument('--shared_memory_role', choices=('master', 'client'),
+                        help='master publishes two-DB binaries; client attaches')
+    parser.add_argument('--shared_memory_dir', metavar='DIR',
+                        help='manifest directory written by the master process')
+    parser.add_argument('--result_dir', metavar='DIR',
+                        help='per-run output directory; overrides the JSON value')
     return parser.parse_args(argv)
 
 

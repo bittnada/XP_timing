@@ -313,6 +313,14 @@
     "description" : "Two-DB mode: checked ID_MAPPING directory",
     "default" : ""
 },
+"shared_memory_role" : {
+    "description" : "two-DB shared snapshot: master publishes and holds, client attaches; empty disables",
+    "default" : ""
+},
+"shared_memory_dir" : {
+    "description" : "Directory of the shared-snapshot manifest written by the master process",
+    "default" : ""
+},
 "timing_update_start" : {
     "description" : "Two-DB mode: completed optimizer steps before first weight feedback",
     "default" : 500
