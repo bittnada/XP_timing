@@ -100,6 +100,8 @@ class SharedSnapshotTest(unittest.TestCase):
             self.assertEqual(again.node_x[0], 1.)
             conn = client.array('placement/physical_db/pin2node_map.npy', copy=False)
             self.assertIsNotNone(conn.base)
+            self.assertIs(again.pin2node_map.base, conn.base)
+            self.assertFalse(again.pin2node_map.flags.writeable)
             client.close()
             script = (
                 'from SharedSnapshot import attach\n'

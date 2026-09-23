@@ -47,16 +47,58 @@ def _json_default(value):
     raise TypeError(type(value).__name__)
 
 
-def _maps(db):
-    for field in FLOATS + INTS + STRINGS:
-        dtype = np.float64 if field in FLOATS else np.int32 if field in INTS else str
-        setattr(db, field, np.asarray(getattr(db, field), dtype=dtype))
+class NameIndex(dict):
+    """name -> id, filled on first lookup so unused maps stay cheap."""
+
+    def __init__(self, names):
+        dict.__init__(self)
+        self._names = names
+
+    def _fill(self):
+        if not dict.__len__(self) and len(self._names):
+            dict.update(self, ((text(name), i) for i, name in enumerate(self._names) if text(name)))
+        return self
+
+    def __getitem__(self, key):
+        return dict.__getitem__(self._fill(), text(key))
+
+    def __contains__(self, key):
+        return dict.__contains__(self._fill(), text(key))
+
+    def get(self, key, default=None):
+        return dict.get(self._fill(), text(key), default)
+
+    def __iter__(self):
+        return dict.__iter__(self._fill())
+
+    def items(self):
+        return dict.items(self._fill())
+
+    def keys(self):
+        return dict.keys(self._fill())
+
+    def values(self):
+        return dict.values(self._fill())
+
+    def __len__(self):
+        return dict.__len__(self._fill())
+
+
+def _maps(db, trusted=False):
+    if not trusted:
+        for field in FLOATS + INTS + STRINGS:
+            dtype = np.float64 if field in FLOATS else np.int32 if field in INTS else str
+            setattr(db, field, np.asarray(getattr(db, field), dtype=dtype))
     db.num_nodes = db.num_physical_nodes
     for kind in ('node', 'pin', 'net'):
-        names = list(getattr(db, kind + '_names'))
-        if len(set(names)) != len(names):
-            raise ValueError('MakeDB duplicate ' + kind + ' names')
-        setattr(db, kind + '_name2id_map', dict(zip(names, range(len(names)))))
+        names = getattr(db, kind + '_names')
+        if trusted:
+            setattr(db, kind + '_name2id_map', NameIndex(names))
+        else:
+            names = list(names)
+            if len(set(names)) != len(names):
+                raise ValueError('MakeDB duplicate ' + kind + ' names')
+            setattr(db, kind + '_name2id_map', dict(zip(names, range(len(names)))))
     for kind in ('node', 'net'):
         flat = np.asarray(getattr(db, 'flat_' + kind + '2pin_map'), dtype=np.int32)
         starts = np.asarray(getattr(db, 'flat_' + kind + '2pin_start_map'), dtype=np.int32)
@@ -76,16 +118,17 @@ def _maps(db):
     for field in ('pin2node_map', 'pin2net_map', 'pin_direct', 'pin_offset_x', 'pin_offset_y'):
         if len(getattr(db, field)) != p:
             raise ValueError('MakeDB length mismatch: ' + field)
-    for kind, count in (('node', n), ('net', m)):
-        owners = np.asarray(getattr(db, 'pin2' + kind + '_map'))
-        if np.any(owners < 0) or np.any(owners >= count):
-            raise ValueError('MakeDB invalid pin2' + kind + '_map')
-        flat = np.asarray(getattr(db, 'flat_' + kind + '2pin_map'))
-        if len(flat) != p or not np.array_equal(np.sort(flat), np.arange(p)):
-            raise ValueError('MakeDB CSR must contain each pin exactly once')
-        starts = np.asarray(getattr(db, 'flat_' + kind + '2pin_start_map'))
-        if not np.array_equal(owners[flat], np.repeat(np.arange(count), np.diff(starts))):
-            raise ValueError('MakeDB inconsistent pin ownership')
+    if not trusted:
+        for kind, count in (('node', n), ('net', m)):
+            owners = np.asarray(getattr(db, 'pin2' + kind + '_map'))
+            if np.any(owners < 0) or np.any(owners >= count):
+                raise ValueError('MakeDB invalid pin2' + kind + '_map')
+            flat = np.asarray(getattr(db, 'flat_' + kind + '2pin_map'))
+            if len(flat) != p or not np.array_equal(np.sort(flat), np.arange(p)):
+                raise ValueError('MakeDB CSR must contain each pin exactly once')
+            starts = np.asarray(getattr(db, 'flat_' + kind + '2pin_start_map'))
+            if not np.array_equal(owners[flat], np.repeat(np.arange(count), np.diff(starts))):
+                raise ValueError('MakeDB inconsistent pin ownership')
     if len(db.net_weights) != m:
         raise ValueError('MakeDB net_weights length mismatch')
     # Dynamic timing state is recomputed; never resume stale criticality/RC.
@@ -298,7 +341,8 @@ def read(params):
         if not prefix:
             raise ValueError('shared snapshot restore requires _shared_prefix')
         from SharedSnapshot import load_physical
-        db = load_physical(store, prefix)
+        runtime = Path(getattr(params, 'shared_memory_dir', '') or '') / 'runtime'
+        db = load_physical(store, prefix, runtime_dir=runtime if runtime.parent.as_posix() != '.' else None)
         if option == 'binary_wo_pos':
             end = db.num_physical_nodes - db.num_terminals - db.num_terminal_NIs
             db.node_x = np.asarray(db.node_x).copy(); db.node_x[:end] = 0
@@ -341,6 +385,13 @@ def finish_initial(db, params):
     """Apply each DEF orientation once, then export unscaled canonical arrays."""
     raw = db.rawdb
     source = raw.data
+    if not getattr(db.node_x, 'flags', None) or not db.node_x.flags.writeable:
+        db.node_x, db.node_y = np.array(db.node_x, copy=True), np.array(db.node_y, copy=True)
+        db.node_size_x = np.array(db.node_size_x, copy=True)
+        db.node_size_y = np.array(db.node_size_y, copy=True)
+        db.pin_offset_x = np.array(db.pin_offset_x, copy=True)
+        db.pin_offset_y = np.array(db.pin_offset_y, copy=True)
+        db.node_orient = np.array(db.node_orient, copy=True)
     source.node_x, source.node_y = db.node_x.copy(), db.node_y.copy()
     source.node_orient = [text(o) for o in db.node_orient]
     if export_requested(params):
@@ -357,7 +408,7 @@ def finish_initial(db, params):
                                      db.node_size_x[node], db.node_size_y[node], orient)
         db.pin_offset_x[pins], db.pin_offset_y[pins] = x, y
         db.node_size_x[node], db.node_size_y[node] = w, h
-        db.node_orient[node] = orient.encode()
+        db.node_orient[node] = orient.encode() if np.issubdtype(np.asarray(db.node_orient).dtype, np.bytes_) else orient
     raw.orients = [text(o) for o in db.node_orient]
     # The parser's large nested cell/pin geometry dictionaries are not needed
     # during placement or RC updates. The exported sidecars retain them.
@@ -365,11 +416,13 @@ def finish_initial(db, params):
     source.ext_pin_info = {}
     # Physical names/IDs remain exactly as MakeDB exported them. Only this
     # timing view uses OpenTimer's instance:pin / top-level-port spelling.
-    db.timing_pin_names = np.asarray([timing_pin_name(p) for p in db.pin_names], dtype='S')
-    db.timing_pin_name2id_map = {text(p): i for i, p in enumerate(db.timing_pin_names)}
-    excluded = set(source.placement_only_nets)
-    db.timing_net_names = np.asarray(['' if text(n) in excluded else text(n) for n in db.net_names], dtype='S')
-    db.timing_net_name2id_map = {text(n): i for i, n in enumerate(db.net_names) if text(n) not in excluded}
+    if getattr(db, 'timing_pin_names', None) is None:
+        db.timing_pin_names = np.asarray([timing_pin_name(p) for p in db.pin_names], dtype='S')
+    if getattr(db, 'timing_net_names', None) is None:
+        excluded = set(source.placement_only_nets)
+        db.timing_net_names = np.asarray(['' if text(n) in excluded else text(n) for n in db.net_names], dtype='S')
+    db.timing_pin_name2id_map = NameIndex(db.timing_pin_names)
+    db.timing_net_name2id_map = NameIndex(db.timing_net_names)
 
 
 def timing_pin_name(name):

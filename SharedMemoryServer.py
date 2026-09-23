@@ -12,14 +12,16 @@ from pathlib import Path
 import signal
 import time
 
-from SharedSnapshot import collect_two_db_files, publish
+from SharedSnapshot import collect_two_db_files, derived_timing_arrays, prepare_runtime, publish
 
 LOG = logging.getLogger(__name__)
 
 
 def publish_and_hold(timing_db, placement_db, mapping, output, name=None):
     files, sources = collect_two_db_files(timing_db, placement_db, mapping)
-    snapshot = publish(files, output, name=name, sources=sources)
+    snapshot = publish(files, output, name=name, sources=sources,
+                       extra_arrays=derived_timing_arrays(timing_db))
+    prepare_runtime(snapshot, output)
     (Path(output) / 'ready').write_text(snapshot.manifest['shm_name'] + '\n')
 
     def stop(signum, _frame):

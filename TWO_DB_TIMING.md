@@ -116,6 +116,9 @@ for this run (they are not silently exported back to binary snapshots).
 
 ## Shared-memory master / client
 
+See [SHARED_MEMORY.md](SHARED_MEMORY.md) for the flag-based master/client
+commands, what stays shared, and how to restart a dead snapshot.
+
 Publish the immutable two-DB binaries once, then start many clients that only
 read their own `read_posX` / `read_posY`.
 

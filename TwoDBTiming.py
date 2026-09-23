@@ -108,7 +108,10 @@ def load(params):
     timer = Timer.Timer()
     if store is not None:
         runtime = Path(directory) / 'runtime'
-        model = store.materialize('timing_cache/model.bin', runtime / 'model.bin')
+        model = runtime / 'model.bin'
+        if not model.is_file():
+            from SharedSnapshot import prepare_runtime
+            prepare_runtime(store, directory)
         timer.raw_timer = timing_cpp.load_timing_model(str(model))
         timer.placedb = original
         original.timing_cache_info = {'status': 'restored_shared', 'model': str(model)}

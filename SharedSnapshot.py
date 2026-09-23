@@ -44,9 +44,14 @@ def _align(offset):
     return (offset + ALIGN - 1) // ALIGN * ALIGN
 
 
+def posix_shm_name(name):
+    """Python prepends '/'; passing '/dp2db_x' becomes '//dp2db_x' and can fail."""
+    return str(name or '').lstrip('/')
+
+
 def shm_name_for(directory):
     digest = hashlib.sha256(str(Path(directory).resolve()).encode()).hexdigest()[:16]
-    return ('/dp2db_' + digest)[:30]
+    return ('dp2db_' + digest)[:29]
 
 
 def _release_tracker(shm):
@@ -83,13 +88,15 @@ class SharedSnapshot:
         except KeyError as exc:
             raise KeyError('shared snapshot missing ' + key) from exc
 
-    def blob(self, key):
+    def blob(self, key, verify=None):
         info = self._entry(key)
         if info['kind'] != 'blob':
             raise TypeError(key + ' is not a blob')
         start, size = info['offset'], info['size']
         data = bytes(self.buf[start:start + size])
-        if bytes_hash(data) != info['sha256']:
+        if verify is None:
+            verify = size <= 4 * 1024 * 1024
+        if verify and bytes_hash(data) != info['sha256']:
             raise ValueError('shared snapshot checksum mismatch: ' + key)
         return data
 
@@ -102,8 +109,11 @@ class SharedSnapshot:
         if view.nbytes != info['size']:
             raise ValueError('shared snapshot size mismatch: ' + key)
         if copy is None:
-            copy = Path(key).name in MUTABLE_SUFFIXES
-        return np.array(view, copy=True) if copy else view
+            copy = Path(key).name.split('.')[0] in MUTABLE_SUFFIXES
+        if copy:
+            return np.array(view, copy=True)
+        view.setflags(write=False)
+        return view
 
     def has(self, key):
         return key in self.manifest['entries']
@@ -185,7 +195,17 @@ def _reusable_snapshot_dir(out):
     return data.get('magic') == MAGIC
 
 
-def publish(files, output, name=None, sources=None):
+def _pack_array(entries, packed, offset, logical, array, source_sha256=''):
+    array = np.ascontiguousarray(array)
+    offset = _align(offset)
+    entries[logical] = dict(kind='array', offset=offset, size=int(array.nbytes),
+                            shape=list(array.shape), dtype=str(array.dtype),
+                            sha256=bytes_hash(array.tobytes()), source_sha256=source_sha256)
+    packed.append(('array', offset, array))
+    return offset + array.nbytes
+
+
+def publish(files, output, name=None, sources=None, extra_arrays=None):
     """Copy snapshot files into a POSIX shm segment and write a tiny manifest.
 
     Restarting the master reuses the same shared_memory_dir; only the POSIX
@@ -195,7 +215,7 @@ def publish(files, output, name=None, sources=None):
     if not _reusable_snapshot_dir(out):
         raise FileExistsError('Choose a new shared_memory_dir: ' + str(out))
     out.mkdir(parents=True, exist_ok=True)
-    name = name or shm_name_for(out)
+    name = posix_shm_name(name or shm_name_for(out))
     entries = {}
     packed = []
     offset = 0
@@ -203,19 +223,15 @@ def publish(files, output, name=None, sources=None):
         raw = Path(path).read_bytes()
         if logical.endswith('.npy'):
             array = np.load(path, allow_pickle=False)
-            array = np.ascontiguousarray(array)
-            offset = _align(offset)
-            entries[logical] = dict(kind='array', offset=offset, size=int(array.nbytes),
-                                    shape=list(array.shape), dtype=str(array.dtype),
-                                    sha256=bytes_hash(array.tobytes()), source_sha256=file_hash(path))
-            packed.append(('array', offset, array))
-            offset += array.nbytes
+            offset = _pack_array(entries, packed, offset, logical, array, file_hash(path))
         else:
             offset = _align(offset)
             entries[logical] = dict(kind='blob', offset=offset, size=len(raw),
                                     sha256=bytes_hash(raw), source_sha256=file_hash(path))
             packed.append(('blob', offset, raw))
             offset += len(raw)
+    for logical, array in (extra_arrays or {}).items():
+        offset = _pack_array(entries, packed, offset, logical, array)
     try:
         stale = shared_memory.SharedMemory(name=name)
     except FileNotFoundError:
@@ -249,13 +265,14 @@ def attach(directory):
     manifest = json.loads((root / 'manifest.json').read_text())
     if manifest.get('schema') != SCHEMA or manifest.get('magic') != MAGIC:
         raise ValueError('Unsupported shared snapshot manifest: ' + str(root))
+    name = posix_shm_name(manifest['shm_name'])
     try:
-        shm = shared_memory.SharedMemory(name=manifest['shm_name'])
+        shm = shared_memory.SharedMemory(name=name)
     except FileNotFoundError as exc:
         raise FileNotFoundError(
-            'shared snapshot %s is gone; restart the master with '
-            '--shared_memory_role master --shared_memory_dir %s'
-            % (manifest['shm_name'], root)
+            'shared snapshot %s is gone; Ctrl+C the old master, then restart '
+            'with --shared_memory_role master --shared_memory_dir %s'
+            % (name, root)
         ) from exc
     _release_tracker(shm)
     if shm.size < int(manifest['bytes']):
@@ -264,7 +281,39 @@ def attach(directory):
     return SharedSnapshot(shm, manifest)
 
 
-def load_physical(store, prefix, copy_mutable=True):
+def derived_timing_arrays(timing_db):
+    """Build OpenTimer spellings once on the master; clients keep them as views."""
+    from MakeDBAdapter import text, timing_pin_name
+
+    root = Path(timing_db) / 'physical_db'
+    pins = np.load(root / 'pin_names.npy', mmap_mode='r', allow_pickle=False)
+    nets = np.load(root / 'net_names.npy', mmap_mode='r', allow_pickle=False)
+    excluded = set(json.loads((root / 'manifest.json').read_text()).get('placement_only_nets') or [])
+    return {
+        'timing/physical_db/timing_pin_names.npy': np.asarray(
+            [timing_pin_name(p) for p in pins], dtype='S'),
+        'timing/physical_db/timing_net_names.npy': np.asarray(
+            ['' if text(n) in excluded else text(n) for n in nets], dtype='S'),
+    }
+
+
+def prepare_runtime(store, directory):
+    """Write large blobs once so every client opens the same files."""
+    runtime = Path(directory) / 'runtime'
+    runtime.mkdir(parents=True, exist_ok=True)
+    written = {}
+    for key, name in (('timing_cache/model.bin', 'model.bin'),
+                      ('timing/physical_db/template.def', 'timing_template.def'),
+                      ('placement/physical_db/template.def', 'placement_template.def')):
+        if store.has(key):
+            dest = runtime / name
+            if not dest.is_file() or dest.stat().st_size != store.manifest['entries'][key]['size']:
+                store.materialize(key, dest)
+            written[key] = dest
+    return written
+
+
+def load_physical(store, prefix, copy_mutable=True, runtime_dir=None):
     """Rebuild a MakeDB physical namespace from SHM. Mutable fields are copied."""
     from MakeDBAdapter import FLOATS, INTS, STRINGS, SCHEMA as PHYS_SCHEMA, _maps
 
@@ -275,14 +324,24 @@ def load_physical(store, prefix, copy_mutable=True):
         key = '%s/physical_db/%s.npy' % (prefix, field)
         copy = copy_mutable and field in MUTABLE_SUFFIXES
         metadata[field] = store.array(key, copy=copy)
+    for extra in ('timing_pin_names', 'timing_net_names', 'net_uses'):
+        key = '%s/physical_db/%s.npy' % (prefix, extra)
+        if store.has(key):
+            metadata[extra] = store.array(key, copy=False)
     metadata['cell_info'] = {}
     metadata['ext_pin_info'] = {}
     metadata['def_template'] = ''
-    if store.has(prefix + '/physical_db/template.def'):
+    template_key = prefix + '/physical_db/template.def'
+    if runtime_dir and store.has(template_key):
+        metadata['def_template_path'] = str(Path(runtime_dir) / (prefix + '_template.def'))
+        if not Path(metadata['def_template_path']).is_file():
+            store.materialize(template_key, metadata['def_template_path'])
+    elif store.has(template_key):
         runtime = Path(tempfile.gettempdir()) / ('dp_shm_' + store.manifest['shm_name'].lstrip('/'))
         metadata['def_template_path'] = str(store.materialize(
-            prefix + '/physical_db/template.def', runtime / (prefix + '_template.def')))
+            template_key, runtime / (prefix + '_template.def')))
     else:
         metadata['def_template_path'] = ''
-    metadata.setdefault('net_uses', ['SIGNAL'] * len(metadata['net_names']))
-    return _maps(SimpleNamespace(**metadata))
+    metadata.setdefault('net_uses', None)
+    metadata['_shared'] = True
+    return _maps(SimpleNamespace(**metadata), trusted=True)

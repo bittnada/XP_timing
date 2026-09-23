@@ -515,12 +515,18 @@ class PlaceDB (TimingCacheMixin):
             pydb = place_io.PlaceIOFunction.pydb(self.rawdb)
         self.pydb = pydb
         self.device = torch.device("cuda" if params.gpu else "cpu")
+        if getattr(pydb, 'timing_pin_names', None) is not None:
+            self.timing_pin_names = np.asarray(pydb.timing_pin_names)
+        if getattr(pydb, 'timing_net_names', None) is not None:
+            self.timing_net_names = np.asarray(pydb.timing_net_names)
 
         self.num_physical_nodes = pydb.num_nodes
         self.num_terminals = pydb.num_terminals
         self.num_terminal_NIs = pydb.num_terminal_NIs
+        shared = getattr(params, '_shared_snapshot', None) is not None
+        self._shared_snapshot = getattr(params, '_shared_snapshot', None)
         self.node_name2id_map = pydb.node_name2id_map
-        self.node_names = np.array(pydb.node_names, dtype=np.string_)
+        self.node_names = np.asarray(pydb.node_names) if shared else np.array(pydb.node_names, dtype=np.bytes_)
         # If the placer directly takes a global placement solution,
         # the cell positions may still be floating point numbers.
         # It is not good to use the place_io OP to round the positions.
@@ -541,44 +547,48 @@ class PlaceDB (TimingCacheMixin):
             if filename is not None and os.path.exists(filename):
                 self.node_x = np.zeros(self.num_physical_nodes, dtype=self.dtype)
                 self.node_y = np.zeros(self.num_physical_nodes, dtype=self.dtype)
-                self.node_orient = np.zeros(self.num_physical_nodes, dtype=np.string_)
+                self.node_orient = np.zeros(self.num_physical_nodes, dtype=np.bytes_)
                 self.read_pl(params, filename)
                 use_read_pl_flag = True
         if not use_read_pl_flag:
-            self.node_x = np.array(pydb.node_x, dtype=self.dtype)
-            self.node_y = np.array(pydb.node_y, dtype=self.dtype)
-            self.node_orient = np.array(pydb.node_orient, dtype=np.string_)
-        self.node_size_x = np.array(pydb.node_size_x, dtype=self.dtype)
-        self.node_size_y = np.array(pydb.node_size_y, dtype=self.dtype)
-        self.node2orig_node_map = np.array(pydb.node2orig_node_map, dtype=np.int32)
-        self.pin_direct = np.array(pydb.pin_direct, dtype=np.string_)
-        self.pin_offset_x = np.array(pydb.pin_offset_x, dtype=self.dtype)
-        self.pin_offset_y = np.array(pydb.pin_offset_y, dtype=self.dtype)
-        self.pin_names = np.array(pydb.pin_names, dtype=np.string_)
+            self.node_x = np.array(pydb.node_x, dtype=self.dtype, copy=True)
+            self.node_y = np.array(pydb.node_y, dtype=self.dtype, copy=True)
+            self.node_orient = np.array(pydb.node_orient, copy=True) if shared else np.array(pydb.node_orient, dtype=np.bytes_)
+        self.node_size_x = np.array(pydb.node_size_x, dtype=self.dtype, copy=True)
+        self.node_size_y = np.array(pydb.node_size_y, dtype=self.dtype, copy=True)
+        self.node2orig_node_map = np.asarray(pydb.node2orig_node_map, dtype=np.int32)
+        self.pin_direct = np.asarray(pydb.pin_direct) if shared else np.array(pydb.pin_direct, dtype=np.bytes_)
+        self.pin_offset_x = np.array(pydb.pin_offset_x, dtype=self.dtype, copy=True)
+        self.pin_offset_y = np.array(pydb.pin_offset_y, dtype=self.dtype, copy=True)
+        self.pin_names = np.asarray(pydb.pin_names) if shared else np.array(pydb.pin_names, dtype=np.bytes_)
         self.net_name2id_map = pydb.net_name2id_map
         self.pin_name2id_map = pydb.pin_name2id_map
-        self.net_names = np.array(pydb.net_names, dtype=np.string_)
-        self.net_uses = np.array(getattr(pydb, 'net_uses', ['SIGNAL'] * len(self.net_names)),
-                                 dtype=np.string_)
+        self.net_names = np.asarray(pydb.net_names) if shared else np.array(pydb.net_names, dtype=np.bytes_)
+        uses = getattr(pydb, 'net_uses', None)
+        if uses is None:
+            self.net_uses = np.broadcast_to(np.array('SIGNAL'), (len(self.net_names),))
+        elif shared:
+            self.net_uses = np.asarray(uses)
+        else:
+            self.net_uses = np.array(uses, dtype=np.bytes_)
         self.net2pin_map = pydb.net2pin_map
-        self.flat_net2pin_map = np.array(pydb.flat_net2pin_map, dtype=np.int32)
-        self.flat_net2pin_start_map = np.array(pydb.flat_net2pin_start_map, dtype=np.int32)
-        self.net_weights = np.array(pydb.net_weights, dtype=self.dtype)
-        self.net_weight_deltas = np.array(pydb.net_weight_deltas, dtype=self.dtype)
-        self.net_criticality = np.array(pydb.net_criticality, dtype=self.dtype)
-        self.net_criticality_deltas = np.array(pydb.net_criticality_deltas, dtype=self.dtype)
+        self.flat_net2pin_map = np.asarray(pydb.flat_net2pin_map, dtype=np.int32)
+        self.flat_net2pin_start_map = np.asarray(pydb.flat_net2pin_start_map, dtype=np.int32)
+        self.net_weights = np.array(pydb.net_weights, dtype=self.dtype, copy=True)
+        self.net_weight_deltas = np.array(pydb.net_weight_deltas, dtype=self.dtype, copy=True)
+        self.net_criticality = np.array(pydb.net_criticality, dtype=self.dtype, copy=True)
+        self.net_criticality_deltas = np.array(pydb.net_criticality_deltas, dtype=self.dtype, copy=True)
         self.node2pin_map = pydb.node2pin_map
-        self.flat_node2pin_map = np.array(pydb.flat_node2pin_map, dtype=np.int32)
-        self.flat_node2pin_start_map = np.array(pydb.flat_node2pin_start_map, dtype=np.int32)
-        self.pin2node_map = np.array(pydb.pin2node_map, dtype=np.int32)
-        self.pin2net_map = np.array(pydb.pin2net_map, dtype=np.int32)
-        self.rows = np.array(pydb.rows, dtype=self.dtype)
-        self.regions = pydb.regions
-        for i in range(len(self.regions)):
-            self.regions[i] = np.array(self.regions[i], dtype=self.dtype)
-        self.flat_region_boxes = np.array(pydb.flat_region_boxes, dtype=self.dtype)
-        self.flat_region_boxes_start = np.array(pydb.flat_region_boxes_start, dtype=np.int32)
-        self.node2fence_region_map = np.array(pydb.node2fence_region_map, dtype=np.int32)
+        self.flat_node2pin_map = np.asarray(pydb.flat_node2pin_map, dtype=np.int32)
+        self.flat_node2pin_start_map = np.asarray(pydb.flat_node2pin_start_map, dtype=np.int32)
+        self.pin2node_map = np.asarray(pydb.pin2node_map, dtype=np.int32)
+        self.pin2net_map = np.asarray(pydb.pin2net_map, dtype=np.int32)
+        # scale() writes these in place; they are small, so never keep SHM views.
+        self.rows = np.array(pydb.rows, dtype=self.dtype, copy=True)
+        self.flat_region_boxes = np.array(pydb.flat_region_boxes, dtype=self.dtype, copy=True)
+        self.regions = [np.array(box, dtype=self.dtype, copy=True) for box in pydb.regions]
+        self.flat_region_boxes_start = np.asarray(pydb.flat_region_boxes_start, dtype=np.int32)
+        self.node2fence_region_map = np.asarray(pydb.node2fence_region_map, dtype=np.int32)
         # print(self.flat_region_boxes, self.flat_region_boxes_start, self.node2fence_region_map)
         # print(self.flat_region_boxes.shape, self.flat_region_boxes_start.shape, self.node2fence_region_map.shape)
         #### nonfence region is set to INT_MAX, we set it to #regions??? not compatible with other APIs
@@ -613,15 +623,16 @@ class PlaceDB (TimingCacheMixin):
             self.unit_horizontal_capacity = params.unit_horizontal_capacity
             self.unit_vertical_capacity = params.unit_vertical_capacity
 
-        # convert node2pin_map to array of array
-        for i in range(len(self.node2pin_map)):
-            self.node2pin_map[i] = np.array(self.node2pin_map[i], dtype=np.int32)
-        self.node2pin_map = np.array(self.node2pin_map, dtype=object)
+        if not shared:
+            # convert node2pin_map to array of array
+            for i in range(len(self.node2pin_map)):
+                self.node2pin_map[i] = np.array(self.node2pin_map[i], dtype=np.int32)
+            self.node2pin_map = np.array(self.node2pin_map, dtype=object)
 
-        # convert net2pin_map to array of array
-        for i in range(len(self.net2pin_map)):
-            self.net2pin_map[i] = np.array(self.net2pin_map[i], dtype=np.int32)
-        self.net2pin_map = np.array(self.net2pin_map, dtype=object)
+            # convert net2pin_map to array of array
+            for i in range(len(self.net2pin_map)):
+                self.net2pin_map[i] = np.array(self.net2pin_map[i], dtype=np.int32)
+            self.net2pin_map = np.array(self.net2pin_map, dtype=object)
 
         # convert the max_net_weight from params
         # note that infinity may be included so we need a type cast
