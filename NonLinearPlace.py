@@ -438,6 +438,10 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                         timing_op.update_net_weights(
                             max_net_weight=placedb.max_net_weight,
                             n=npaths)
+                        import MakeDBAdapter
+                        MakeDBAdapter.pin_special_macro_net_weights(placedb)
+                        if bridge is not None:
+                            MakeDBAdapter.pin_special_macro_net_weights(bridge.original)
                         if bridge is not None or self.device != torch.device("cpu"):
                             # Copy weights from placedb.net_weights to device.
                             self.data_collections.net_weights.copy_(

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import numpy as np
@@ -344,6 +345,38 @@ class AdapterTest(unittest.TestCase):
         PlacementState.write_final(self.p, restored)
         self.assertIn('u1', (self.root / 'legacy.pl').read_text())
         self.assertIn('cell_id\tposX', (self.root / 'x.tsv').read_text())
+
+
+class SpecialMacroNetWeightTest(unittest.TestCase):
+    def test_modcsa_stays_strictly_heaviest_after_timing_cap(self):
+        db = SimpleNamespace(
+            net_names=np.array(['n0', 'MODCSA_macro', 'n1', 'CriticalPathNet0']),
+            net_weights=np.array([1.0, 1000.0, 1.0, 1000.0]),
+        )
+        self.assertEqual(adapter.pin_special_macro_net_weights(db), 2)
+        self.assertGreater(db.net_weights[1], db.net_weights[0])
+        self.assertGreater(db.net_weights[3], db.net_weights[2])
+        # Lilith multiplies and caps every mapped net at max_net_weight.
+        db.net_weights[:] = [1024.0, 1024.0, 800.0, 1024.0]
+        adapter.pin_special_macro_net_weights(db)
+        other_max = 1024.0
+        self.assertGreater(db.net_weights[1], other_max)
+        self.assertGreater(db.net_weights[3], other_max)
+        self.assertEqual(db.net_weights[1], other_max * adapter.SPECIAL_MACRO_NET_RATIO)
+        self.assertEqual(db.net_weights[1], db.net_weights[3])
+        self.assertEqual(db.net_weights[0], 1024.0)
+        self.assertEqual(db.net_weights[2], 800.0)
+
+    def test_modcsa_name_is_case_insensitive_and_absent_is_noop(self):
+        db = SimpleNamespace(
+            net_names=np.array(['a', b'modcsa_net', 'b']),
+            net_weights=np.array([3.0, 1000.0, 4.0]),
+        )
+        self.assertEqual(adapter.pin_special_macro_net_weights(db), 1)
+        self.assertGreater(db.net_weights[1], max(db.net_weights[0], db.net_weights[2]))
+        plain = SimpleNamespace(net_names=np.array(['a', 'b']), net_weights=np.array([1.0, 2.0]))
+        self.assertEqual(adapter.pin_special_macro_net_weights(plain), 0)
+        np.testing.assert_array_equal(plain.net_weights, [1.0, 2.0])
 
 
 if __name__ == '__main__':

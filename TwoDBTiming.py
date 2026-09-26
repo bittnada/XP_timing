@@ -228,7 +228,10 @@ class TwoDBTiming:
 
     def update_net_weights(self, max_net_weight=np.inf, n=1):
         result = self.original_op.update_net_weights(max_net_weight=max_net_weight, n=n)
+        import MakeDBAdapter
+        MakeDBAdapter.pin_special_macro_net_weights(self.original)
         self.copy_weights_to_placement()
+        MakeDBAdapter.pin_special_macro_net_weights(self.placement)
         self.feedback_count += 1
         LOG.info('Two-DB feedback #%d: %d original net weights -> %d placement nets '
                  '(internal omitted nets are not copied)', self.feedback_count,

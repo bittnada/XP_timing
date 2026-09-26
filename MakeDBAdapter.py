@@ -47,6 +47,51 @@ def _json_default(value):
     raise TypeError(type(value).__name__)
 
 
+# MakeDB sets these to 1000 vs default 1. Lilith/Adams then multiply every
+# mapped net and cap at max_net_weight, so that 1000x gap disappears. Re-pin
+# after each update so DEF special nets stay the strongest macro pull.
+SPECIAL_MACRO_NET_PREFIXES = ('MODCSA', 'CRITICALPATHNET')
+SPECIAL_MACRO_NET_BASE = 1000.0
+SPECIAL_MACRO_NET_RATIO = 1000.0
+
+
+def is_special_macro_net(name):
+    upper = text(name).upper()
+    return upper.startswith(SPECIAL_MACRO_NET_PREFIXES)
+
+
+def special_macro_net_mask(names):
+    return np.fromiter((is_special_macro_net(name) for name in names),
+                       dtype=bool, count=len(names))
+
+
+def pin_special_macro_net_weights(db):
+    """Keep DEF MODCSA/CriticalPathNet strictly heaviest among all nets."""
+    names = getattr(db, 'net_names', None)
+    weights = getattr(db, 'net_weights', None)
+    if names is None or weights is None:
+        return 0
+    mask = special_macro_net_mask(names)
+    if not mask.any():
+        return 0
+    out = np.asarray(weights)
+    if len(out) != len(mask):
+        raise ValueError('MakeDB net_weights length mismatch')
+    if not isinstance(weights, np.ndarray) or not out.flags.writeable:
+        out = np.array(out, copy=True)
+        db.net_weights = out
+    other = out[~mask]
+    finite = other[np.isfinite(other)] if other.size else other
+    other_max = float(finite.max()) if finite.size else 0.0
+    target = max(SPECIAL_MACRO_NET_BASE, other_max * SPECIAL_MACRO_NET_RATIO)
+    if target <= other_max:
+        target = other_max + SPECIAL_MACRO_NET_BASE
+    out[mask] = target
+    logging.info('Pinned %d special macro net(s) to %.6g so they stay strictly '
+                 'heaviest (other max %.6g)', int(mask.sum()), target, other_max)
+    return int(mask.sum())
+
+
 class NameIndex(dict):
     """name -> id, filled on first lookup so unused maps stay cheap."""
 
@@ -423,6 +468,7 @@ def finish_initial(db, params):
         db.timing_net_names = np.asarray(['' if text(n) in excluded else text(n) for n in db.net_names], dtype='S')
     db.timing_pin_name2id_map = NameIndex(db.timing_pin_names)
     db.timing_net_name2id_map = NameIndex(db.timing_net_names)
+    pin_special_macro_net_weights(db)
 
 
 def timing_pin_name(name):

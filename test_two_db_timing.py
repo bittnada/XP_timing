@@ -81,6 +81,19 @@ class BridgeTest(unittest.TestCase):
             self.b.copy_weights_to_placement()
         np.testing.assert_array_equal(self.p.net_weights, [2, 5])
 
+    def test_feedback_keeps_modcsa_strictly_heaviest(self):
+        import MakeDBAdapter
+        self.p.net_names = np.array(['y', 'MODCSA_hold'])
+        self.t.net_names = np.array(['y', 'n', 'MODCSA_hold'])
+        def fake_update(**_kwargs):
+            self.t.net_weights[:] = [1024.0, 1.0, 1024.0]
+        self.b.original_op = NS(update_net_weights=fake_update)
+        self.b.update_net_weights(max_net_weight=1024, n=1)
+        other_max = 1024.0
+        self.assertGreater(self.p.net_weights[1], self.p.net_weights[0])
+        self.assertEqual(self.p.net_weights[1], other_max * MakeDBAdapter.SPECIAL_MACRO_NET_RATIO)
+        self.assertGreater(self.t.net_weights[2], max(self.t.net_weights[0], self.t.net_weights[1]))
+
     def test_schedule_and_bad_positions(self):
         self.assertEqual([i for i in range(490, 531) if self.b.due(i)], [500, 515, 530])
         with self.assertRaises(ValueError): self.b.project_positions(self.pos[:-1])
